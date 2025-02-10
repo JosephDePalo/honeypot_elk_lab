@@ -1,0 +1,269 @@
+- name: ELK server installation and configuration
+  hosts: test_elk
+  become: yes
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+    
+    - name: Upgrade all packages
+      apt:
+        upgrade: yes
+        autoclean: yes
+        autoremove: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - gpg
+          - jq
+
+    - name: Download Elasticsearch GPG key
+      get_url:
+        url: https://artifacts.elastic.co/GPG-KEY-elasticsearch
+        dest: /tmp/GPG-KEY-elasticsearch
+        mode: '0644'
+
+    - name: Convert GPG key to keyring
+      command: gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg /tmp/GPG-KEY-elasticsearch
+
+    - name: Add Elasticsearch APT repository to sources list
+      copy:
+        content: "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main"
+        dest: /etc/apt/sources.list.d/elastic-8.x.list
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install ELK stack
+      apt:
+        name:
+          - elasticsearch
+          - logstash
+          - kibana
+
+    - name: Set Elasticsearch host
+      lineinfile:
+        path: /etc/elasticsearch/elasticsearch.yml
+        regexp: "^#network.host"
+        line: "network.host: localhost"
+        state: present
+
+    - name: Set Elasticsearch port
+      lineinfile:
+        path: /etc/elasticsearch/elasticsearch.yml
+        regexp: "^#http.port"
+        line: "http.port: 9200"
+        state: present
+
+    - name: Set Elasticsearch to single node
+      lineinfile:
+        path: /etc/elasticsearch/elasticsearch.yml
+        regexp: "^#discovery.type"
+        line: "discovery.type: single-node"
+        state: present
+
+    - name: Disable master node
+      lineinfile:
+        path: /etc/elasticsearch/elasticsearch.yml
+        regexp: "^cluster.initial_master_nodes"
+        replace: "#cluster.initial_master_nodes: []"
+        state: present
+
+    - name: Set Logstash to reload automatically
+      lineinfile:
+        path: /etc/logstash/logstash.yml
+        regexp: "^#config.reload.automatic"
+        line: "config.reload.automatic: true"
+        state: present
+
+    - name: Set Logstash reload interval
+      lineinfile:
+        path: /etc/logstash/logstash.yml
+        regexp: "^#config.reload.interval"
+        line: "config.reload.interval: 3s"
+        state: present
+
+    - name: Set Kibana host
+      lineinfile:
+        path: /etc/kibana/kibana.yml
+        regexp: "^#server.host"
+        line: "server.host: 0.0.0.0"
+        state: present
+
+    - name: Set Kibana port
+      lineinfile:
+        path: /etc/kibana/kibana.yml
+        regexp: "^#server.port"
+        line: "server.port: 5601"
+        state: present
+
+    - name: Set Elasticsearch URL in Kibana
+      lineinfile:
+        path: /etc/kibana/kibana.yml
+        regexp: "^#elasticsearch.hosts"
+        line: "elasticsearch.hosts: [\"http://localhost:9200\"]"
+        state: present
+
+    - name: Enable and start Elasticsearch
+      service:
+        name: elasticsearch
+        enabled: yes
+        state: started
+
+    - name: Enable and start Logstash
+      service:
+        name: logstash
+        enabled: yes
+        state: started
+
+    - name: Enable and start Kibana
+      service:
+        name: kibana
+        enabled: yes
+        state: started
+
+    - name: Generate Elasticsearch password
+      command: /usr/share/elasticsearch/bin/elasticsearch-setup-passwords auto --batch
+      register: elastic_password
+
+    - name: Generate Elasticsearch API token for Logstash
+      uri:
+        url: http://localhost:9200/_security/api_key
+        method: POST
+        body: '{"name": "logstash", "expiration": "1d", "role_descriptors": {"logstash_writer": {"cluster": ["all"], "index": [{"names": ["*"], "privileges": ["write"]}]} }'
+        headers:
+          Authorization: "Basic {{ elastic_password.stdout['elastic'] }}"
+          Content-Type: "application/json"
+        body_format: json
+        return_content: yes
+      register: es_api_key
+
+    - name: Create Logstash Filebeat configuration
+      template:
+        src: ./logstash_beats.conf.j2
+        dest: /etc/logstash/conf.d/beats.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+
+
+    
+
+
+- name: Honeypot installation and configuration
+  hosts: RANDOM
+  become: yes
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: yes
+        autoclean: yes
+        autoremove: yes
+    
+    - name: Install required packages
+      apt:
+        name:
+          - git
+          - python3-venv
+          - libssl-dev
+          - libffi-dev
+          - build-essential
+          - libpython3-dev
+          - python3-minimal
+          - authbind
+
+    - name: Create a user for the honeypot
+      user:
+        name: cowrie
+        shell: /bin/bash
+        home: /home/cowrie
+        createhome: yes
+    
+    - name: Clone the cowrie repository
+      git:
+        repo: http://github.com/cowrie/cowrie
+        dest: /cowrie
+
+    - name: Change ownership of the /cowrie directory to the cowrie user
+      file:
+        path: /cowrie
+        owner: cowrie
+        group: cowrie
+        recurse: true
+
+    - name: Create a virtual environment for cowrie
+      command: python3 -m venv /cowrie/cowrie-env
+
+    - name: Upgrade pip
+      pip:
+        executable: /cowrie/cowrie-env/bin/pip
+        name: pip
+        state: latest
+
+    - name: Install requirements
+      pip:
+        executable: /cowrie/cowrie-env/bin/pip
+        requirements: /cowrie/requirements.txt
+
+    - name: Create authbind file
+      command: touch /etc/authbind/byport/22
+    
+    - name: Change ownership of the authbind file
+      file:
+        path: /etc/authbind/byport/22
+        owner: cowrie
+        group: cowrie
+
+    - name: Change permissions of the authbind file
+      command: chmod 770 /etc/authbind/byport/22
+    
+    - name: Edit sshd port
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "^#Port 22"
+        line: "Port 2022"
+        state: present
+
+    - name: Change cowrie port
+      lineinfile:
+        path: /cowrie/etc/cowrie.cfg.dist
+        regexp: "listen_endpoints = tcp:2222:interface=0.0.0.0"
+        line: "listen_endpoints = tcp:22:interface=0.0.0.0"
+        state: present
+
+    - name: Restart sshd
+      service:
+        name: sshd
+        state: restarted
+    
+    # - name: Add cron job to start cowrie at boot
+    #   cron:
+    #     name: "Start Cowrie Honeypot"
+    #     special_time: reboot
+    #     job: "/cowrie/cowrie-env/bin/python3 /cowrie/bin/cowrie start"
+    #     user: cowrie
+    #     state: present
+
+    - name: Curl Filebeat
+      get_url:
+        url: https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.17.1-amd64.deb 
+        dest: /tmp/filebeat-8.17.1-amd64.deb
+
+    - name: Install Filebeat
+      apt:
+        deb: /tmp/filebeat-8.17.1-amd64.deb
+
+
+    # - name: Reboot system
+    #   command: reboot
