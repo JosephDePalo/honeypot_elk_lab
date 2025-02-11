@@ -15,7 +15,7 @@ output {
 	elasticsearch {
 		hosts => ["https://localhost:9200"]
 		data_stream => "true"
-		api_key => {{ es_api_key }}
+		api_key => "{{ es_api_key.stdout }}"
 		ssl => true
 		ssl_certificate_verification => false
 	}

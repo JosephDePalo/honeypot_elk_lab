@@ -1,7 +1,11 @@
 - name: ELK server installation and configuration
-  hosts: test_elk
+  hosts: elk_server
   become: yes
   tasks:
+    - name: Register private IP address
+      shell: hostname -I
+      register: elk_server_ip
+
     - name: Update apt cache
       apt:
         update_cache: yes
@@ -72,7 +76,7 @@
       lineinfile:
         path: /etc/elasticsearch/elasticsearch.yml
         regexp: "^cluster.initial_master_nodes"
-        replace: "#cluster.initial_master_nodes: []"
+        line: "#cluster.initial_master_nodes: []"
         state: present
 
     - name: Set Logstash to reload automatically
@@ -89,20 +93,6 @@
         line: "config.reload.interval: 3s"
         state: present
 
-    - name: Set Kibana host
-      lineinfile:
-        path: /etc/kibana/kibana.yml
-        regexp: "^#server.host"
-        line: "server.host: 0.0.0.0"
-        state: present
-
-    - name: Set Kibana port
-      lineinfile:
-        path: /etc/kibana/kibana.yml
-        regexp: "^#server.port"
-        line: "server.port: 5601"
-        state: present
-
     - name: Set Elasticsearch URL in Kibana
       lineinfile:
         path: /etc/kibana/kibana.yml
@@ -116,11 +106,135 @@
         enabled: yes
         state: started
 
+    - name: Generate Elasticsearch password
+      command: /usr/share/elasticsearch/bin/elasticsearch-reset-password -abs -u elastic
+      register: elastic_password
+
+    - name: Query Elasticsearch for API key
+      uri:
+        url: "https://localhost:9200/_security/api_key"
+        method: POST
+        user: "elastic"
+        password: "{{ elastic_password.stdout }}"
+        body: |
+          {
+            "superuser": {
+              "cluster": [
+                "all"
+              ],
+              "indices": [
+                {
+                  "names": [
+                    "*"
+                  ],
+                  "privileges": [
+                    "all"
+                  ],
+                  "allow_restricted_indices": false
+                },
+                {
+                  "names": [
+                    "*"
+                  ],
+                  "privileges": [
+                    "monitor",
+                    "read",
+                    "view_index_metadata",
+                    "read_cross_cluster"
+                  ],
+                  "allow_restricted_indices": true
+                }
+              ],
+              "applications": [],
+              "run_as": [
+                "*"
+              ],
+              "metadata": {},
+              "transient_metadata": {
+                "enabled": true
+              },
+              "remote_indices": [
+                {
+                  "names": [
+                    "*"
+                  ],
+                  "privileges": [
+                    "all"
+                  ],
+                  "allow_restricted_indices": false,
+                  "clusters": [
+                    "*"
+                  ]
+                },
+                {
+                  "names": [
+                    "*"
+                  ],
+                  "privileges": [
+                    "monitor",
+                    "read",
+                    "view_index_metadata",
+                    "read_cross_cluster"
+                  ],
+                  "allow_restricted_indices": true,
+                  "clusters": [
+                    "*"
+                  ]
+                }
+              ],
+              "remote_cluster": [
+                {
+                  "privileges": [
+                    "monitor_enrich",
+                    "monitor_stats"
+                  ],
+                  "clusters": [
+                    "*"
+                  ]
+                }
+              ]
+            }
+          }
+        headers:
+          Content-Type: "application/json"
+        validate_certs: no
+      register: api_key_response
+
+    - name: Decode the base64 encoded API key
+      shell: echo "{{ api_key_response.json.encoded }}" | base64 --decode
+      register: es_api_key
+
+    - name: Print API key
+      debug:
+        msg: "Elasticsearch API Key: {{ es_api_key.stdout }}"
+
+    - name: Create Logstash Filebeat configuration
+      template:
+        src: files/elk/logstash_beats.conf.j2
+        dest: /etc/logstash/conf.d/beats.conf
+        owner: root
+        group: root
+        mode: '0644' 
+
     - name: Enable and start Logstash
       service:
         name: logstash
         enabled: yes
         state: started
+
+    - name: Generate Elasticsearch enrollment token
+      shell: /usr/share/elasticsearch/bin/elasticsearch-create-enrollment-token -s kibana
+      register: enrollment_token
+
+    - name: Setup Kibana
+      shell: /usr/share/kibana/bin/kibana-setup --enrollment-token {{ enrollment_token.stdout }}
+
+    - name: Change Kibana server host
+      lineinfile:
+        path: /etc/kibana/kibana.yml
+        regexp: "^#server.host"
+        line: "server.host: 0.0.0.0"
+        state: present
 
     - name: Enable and start Kibana
       service:
@@ -128,37 +242,10 @@
         enabled: yes
         state: started
 
-    - name: Generate Elasticsearch password
-      command: /usr/share/elasticsearch/bin/elasticsearch-setup-passwords auto --batch
-      register: elastic_password
-
-    - name: Generate Elasticsearch API token for Logstash
-      uri:
-        url: http://localhost:9200/_security/api_key
-        method: POST
-        body: '{"name": "logstash", "expiration": "1d", "role_descriptors": {"logstash_writer": {"cluster": ["all"], "index": [{"names": ["*"], "privileges": ["write"]}]} }'
-        headers:
-          Authorization: "Basic {{ elastic_password.stdout['elastic'] }}"
-          Content-Type: "application/json"
-        body_format: json
-        return_content: yes
-      register: es_api_key
-
-    - name: Create Logstash Filebeat configuration
-      template:
-        src: ./logstash_beats.conf.j2
-        dest: /etc/logstash/conf.d/beats.conf
-        owner: root
-        group: root
-        mode: '0644'
-
-
-
-    
 
 
 - name: Honeypot installation and configuration
-  hosts: RANDOM
+  hosts: honeypot
   become: yes
   tasks:
     - name: Update apt cache
@@ -235,26 +322,37 @@
         line: "Port 2022"
         state: present
 
+    - name: Copy cowrie configuration file
+      command: cp /cowrie/etc/cowrie.cfg.dist /cowrie/etc/cowrie.cfg
+
     - name: Change cowrie port
       lineinfile:
-        path: /cowrie/etc/cowrie.cfg.dist
+        path: /cowrie/etc/cowrie.cfg
         regexp: "listen_endpoints = tcp:2222:interface=0.0.0.0"
-        line: "listen_endpoints = tcp:22:interface=0.0.0.0"
+        line: "listen_endpoints = systemd:domain=INET:index=0"
         state: present
+
+    - name: Copy cowrie service file
+      copy:
+        src: files/honeypot/cowrie.service
+        dest: /etc/systemd/system/cowrie.service
+
+    - name: Copy cowrie socket file
+      copy:
+        src: files/honeypot/cowrie.socket
+        dest: /etc/systemd/system/cowrie.socket
 
     - name: Restart sshd
       service:
         name: sshd
         state: restarted
-    
-    # - name: Add cron job to start cowrie at boot
-    #   cron:
-    #     name: "Start Cowrie Honeypot"
-    #     special_time: reboot
-    #     job: "/cowrie/cowrie-env/bin/python3 /cowrie/bin/cowrie start"
-    #     user: cowrie
-    #     state: present
 
+    - name: Enable and start cowrie socket
+      systemd:
+        name: cowrie.socket
+        enabled: yes
+        state: started
+    
     - name: Curl Filebeat
       get_url:
         url: https://artifacts.elastic.co/downloads/beats/filebeat/filebeat-8.17.1-amd64.deb 
@@ -264,6 +362,18 @@
       apt:
         deb: /tmp/filebeat-8.17.1-amd64.deb
 
+    - name: Copy Filebeat configuration file
+      template:
+        src: files/honeypot/filebeat.yml.j2
+        dest: /etc/filebeat/filebeat.yml
+        owner: root
+        group: root
+        mode: '0644'
 
-    # - name: Reboot system
-    #   command: reboot
+    - name: Enable and start Filebeat
+      service:
+        name: filebeat
+        enabled: yes
+        state: started
+
+    
