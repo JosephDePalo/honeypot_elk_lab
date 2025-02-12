@@ -152,7 +152,7 @@ setup.kibana:
 # ------------------------------ Logstash Output -------------------------------
 output.logstash:
   # The Logstash hosts
-  hosts: ["{{ elk_server_ip.stdout }}:5044"]
+  hosts: ["{{ elk_server_ip }}:5044"]
 
   # Optional SSL. By default is off.
   # List of root certificates for HTTPS server verifications
