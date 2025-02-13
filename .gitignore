@@ -1,1 +1,3 @@
 hosts.ini
+*terraform*
+*.pem

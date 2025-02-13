@@ -142,7 +142,6 @@ resource "aws_instance" "elk_server" {
     instance_type = "t3.large"
     key_name      = "honey_net"
     associate_public_ip_address = true
-    #user_data = file("${path.module}/elk_server_setup.sh")
 
     root_block_device {
         volume_size = 25
@@ -161,7 +160,6 @@ resource "aws_instance" "honeypot_server" {
     instance_type = "t2.micro"
     key_name      = "honey_net"
     associate_public_ip_address = true
-    #user_data = file("${path.module}/honeypot_server_setup.sh")
 
     root_block_device {
         volume_size = 8
@@ -170,4 +168,12 @@ resource "aws_instance" "honeypot_server" {
     tags = {
         Name = "honeypot_server"
     }
+}
+
+output "elk_server_public_ip" {
+    value = aws_instance.elk_server.public_ip
+}
+
+output "honeypot_server_public_ip" {
+    value = aws_instance.honeypot_server.public_ip
 }

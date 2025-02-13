@@ -127,7 +127,7 @@
                 "index": [
                   {
                     "names": ["*"],
-                    "privileges": ["create", "index", "write"]
+                    "privileges": ["create", "index", "write", "create_index"]
                   }
                 ]
               }
@@ -176,14 +176,28 @@
         enabled: yes
         state: started
 
+    - name: Create Kibana data view
+      uri:
+        url: "http://localhost:5601/api/data_views/data_view"
+        method: POST
+        headers:
+          kbn-xsrf: "true"
+          Content-Type: "application/json"
+        user: "elastic"
+        password: "{{ elastic_password }}"
+        force_basic_auth: yes
+        body: 
+          data_view:
+            title: "logs-*"
+            name: "Logs"
+            timeFieldName: "@timestamp"
+        body_format: json
+        status_code: 200, 201
+
 
     - name: Get private IP address
       shell: hostname -I
-      register: private_ip
-
-    - name: Register private IP address
-      set_fact:
-        elk_server_ip: "{{ private_ip.stdout }}"
+      register: elk_private_ip
 
 
 - name: Honeypot installation and configuration
@@ -291,7 +305,7 @@
 
     - name: Enable and start cowrie socket
       systemd:
-        name: cowrie.socket
+        name: cowrie.service
         enabled: yes
         state: started
     
@@ -303,6 +317,10 @@
     - name: Install Filebeat
       apt:
         deb: /tmp/filebeat-8.17.1-amd64.deb
+
+    - name: Get Logstash private IP address
+      set_fact:
+        logstash_ip: "{{ hostvars['elk_server']['elk_private_ip']['stdout'] }}"
 
     - name: Copy Filebeat configuration file
       template:
