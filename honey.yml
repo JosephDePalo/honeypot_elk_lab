@@ -176,6 +176,24 @@
         enabled: yes
         state: started
 
+    - name: Wait for Kibana to be available
+      wait_for:
+        host: "localhost"
+        port: 5601
+        delay: 10
+        timeout: 180
+        state: started
+
+    - name: Ensure Kibana API is responsive
+      uri:
+        url: "http://localhost:5601/api/status"
+        method: GET
+        status_code: 200
+      register: kibana_status
+      retries: 15
+      delay: 10
+      until: kibana_status.status == 200
+
     - name: Create Kibana data view
       uri:
         url: "http://localhost:5601/api/data_views/data_view"
@@ -193,11 +211,19 @@
             timeFieldName: "@timestamp"
         body_format: json
         status_code: 200, 201
-
+      register: create_data_view_response
+      until: create_data_view_response.status == 200 or create_data_view_response.status == 201
+      retries: 10
+      delay: 10
 
     - name: Get private IP address
       shell: hostname -I
       register: elk_private_ip
+      changed_when: false
+
+    - name: Trim IP address
+      set_fact:
+        elk_private_ip: "{{ elk_private_ip.stdout | trim }}"
 
 
 - name: Honeypot installation and configuration
@@ -320,7 +346,7 @@
 
     - name: Get Logstash private IP address
       set_fact:
-        logstash_ip: "{{ hostvars['elk_server']['elk_private_ip']['stdout'] }}"
+        logstash_ip: "{{ hostvars['elk']['elk_private_ip'] }}"
 
     - name: Copy Filebeat configuration file
       template:
