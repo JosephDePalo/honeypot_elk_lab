@@ -202,7 +202,7 @@
           kbn-xsrf: "true"
           Content-Type: "application/json"
         user: "elastic"
-        password: "{{ elastic_password }}"
+        password: "{{ elastic_password.stdout }}"
         force_basic_auth: yes
         body: 
           data_view:
